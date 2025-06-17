@@ -42,8 +42,18 @@ class Patient(models.Model):
     age = models.IntegerField()
     mobile_number = models.CharField(max_length=15)
     gender = models.CharField(max_length=10, choices=[('M', 'M'), ('F', 'F'), ('O', 'O')])
+    is_primary = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['mobile_number', 'is_primary'],
+                condition=models.Q(is_primary=True),
+                name='unique_primary_patient_per_mobile'
+            )
+        ]
 
 class StaffMember(models.Model):
     id = models.AutoField(primary_key=True)

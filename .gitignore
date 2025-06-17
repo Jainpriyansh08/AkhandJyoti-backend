@@ -17,11 +17,14 @@ settings.json
 .DS_Store
 .AppleDouble
 .LSOverride
+.Spotlight-V100
+.Trashes
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 .pytest_cache/
 *.py[cod]
+*$py.class
 
 # Distribution / packaging
 bin/
@@ -37,6 +40,7 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # Installer logs
 pip-log.txt
@@ -45,10 +49,21 @@ pip-delete-this-directory.txt
 # Unit test / coverage reports
 .tox/
 .coverage
+.coverage.*
 .cache
 nosetests.xml
 coverage.xml
 htmlcov
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+media/
 
 # Sphinx documentation
 docs/_build/
@@ -96,6 +111,9 @@ docs/_build/
 # remove env files from commit
 env/*
 venv/*
+.env
+.venv
+.python-version
 .ipynb_checkpoints
 
 *.env
@@ -121,3 +139,17 @@ google_service_account_2.json
 #remove google service account for user-astrologer notifications
 google_service_account_astro_portal.json
 google_service_account_astro_user.json
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# Logs
+logs/
+*.log
+
+# Local development settings
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local

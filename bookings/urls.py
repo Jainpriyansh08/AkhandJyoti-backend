@@ -1,6 +1,11 @@
-from django.urls import path
-from .views import BookingSlotListView
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import BookingSlotViewSet, BookingOrderViewSet
+
+router = DefaultRouter()
+router.register(r'slots', BookingSlotViewSet, basename='booking-slot')
+router.register(r'orders', BookingOrderViewSet, basename='bookingorder')
 
 urlpatterns = [
-    path('slots/', BookingSlotListView.as_view(), name='booking-slot-list'),
+    path('', include(router.urls)),
 ] 

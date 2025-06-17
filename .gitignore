@@ -1,0 +1,123 @@
+# vim.gitignore
+[._]*.s[a-w][a-z]
+[._]s[a-w][a-z]
+*.un~
+Session.vim
+.netrwhist
+*~
+
+# workspace files are user-specific
+*.sublime-workspace
+settings.json
+# project files should be checked into the repository, unless a significant
+# proportion of contributors will probably not be using SublimeText
+*.sublime-project
+
+# OSX ignores
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Distribution / packaging
+bin/
+build/
+develop-eggs/
+dist/
+eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+htmlcov
+
+# Sphinx documentation
+docs/_build/
+/.project
+/.pydevproject
+
+## Pycharm IDE
+.idea/
+# User-specific stuff:
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/experchat.iml
+.idea/inspectionProfiles/Project_Default.xml
+.idea/misc.xml
+.idea/modules.xml
+.idea/vcs.xml
+
+# Sensitive or high-churn files:
+.idea/dataSources/
+.idea/dataSources.ids
+.idea/dataSources.xml
+.idea/dataSources.local.xml
+.idea/sqlDataSources.xml
+.idea/dynamic.xml
+.idea/uiDesigner.xml
+
+# Gradle:
+.idea/gradle.xml
+.idea/libraries
+
+# Mongo Explorer plugin:
+.idea/mongoSettings.xml
+
+## File-based project format:
+*.iws
+
+## Plugin-specific files:
+
+# IntelliJ
+/out/
+
+# mpeltonen/sbt-idea plugin
+.idea_modules/
+
+# remove env files from commit
+env/*
+venv/*
+.ipynb_checkpoints
+
+*.env
+.vscode/launch.json
+.vscode/settings.json
+/.mypy_cache/
+*.pem
+
+# remove test_images from commit
+test_images/
+
+#remove feedback_images from commit
+feedback_images/
+
+#remove .p8 files
+apple_sign_in_key.p8
+
+#remove google service json file
+google_service_account.json
+google_service_account_maverick.json
+google_service_account_2.json
+
+#remove google service account for user-astrologer notifications
+google_service_account_astro_portal.json
+google_service_account_astro_user.json

@@ -60,6 +60,7 @@ class BookingOrder(models.Model):
     resource_hold_time = models.DateTimeField(null=True, blank=True, help_text="Timestamp for when slots were held")
     his_invoice_number = models.CharField(max_length=100, unique=True, null=True, blank=True)
     his_invoice_generated = models.BooleanField(default=False)
+    payment_transaction = models.ForeignKey('payments.PaymentTransaction', on_delete=models.SET_NULL, null=True, blank=True, related_name='booking_orders')
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
 
@@ -82,13 +83,16 @@ class BookingOrder(models.Model):
             self.total_amount = self.package.base_amount * self.number_of_members
             self.final_amount = self.total_amount
             
-            # If coupons are provided during creation, apply them
+            # Save first to get the ID
+            super().save(*args, **kwargs)
+            
+            # Apply coupons if they were provided during creation
             if hasattr(self, '_online_coupon_code'):
                 self.apply_coupon(self._online_coupon_code)
             if hasattr(self, '_promotional_coupon_code'):
                 self.apply_coupon(self._promotional_coupon_code)
-            
-        super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
     def apply_coupon(self, coupon_code):
         """Apply a pre-validated coupon to the booking"""

@@ -86,24 +86,20 @@ class PatientRegistrationView(APIView):
         
         registered_patients = []
         for patient_data in patients_data:
-            is_primary = patient_data.pop('is_primary', False)
             patient, created = Patient.objects.get_or_create(
                 mobile_number=patient_data['mobile_number'],
                 defaults={
                     'first_name': patient_data['first_name'],
                     'last_name': patient_data['last_name'],
                     'age': patient_data['age'],
-                    'gender': patient_data['gender'],
-                    'is_primary': is_primary
+                    'gender': patient_data['gender']
                 }
             )
             
             # If patient exists but details are different, update them
             if not created:
-                for field in ['first_name', 'last_name', 'age', 'gender', 'is_primary']:
-                    if field == 'is_primary':
-                        setattr(patient, field, is_primary)
-                    elif field in patient_data and getattr(patient, field) != patient_data[field]:
+                for field in ['first_name', 'last_name', 'age', 'gender']:
+                    if field in patient_data and getattr(patient, field) != patient_data[field]:
                         setattr(patient, field, patient_data[field])
                 patient.save()
             

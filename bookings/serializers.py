@@ -6,9 +6,7 @@ from users.serializers import PatientSerializer, StaffMemberSerializer
 from packages.serializers import PackageSerializer
 from coupons.serializers import CouponSerializer
 from django.core.exceptions import ValidationError
-from users.models import Patient
-from packages.models import Package
-from coupons.models import Coupon
+from .services import BookingService, CouponService, SlotService
 
 class BookingSlotSerializer(serializers.ModelSerializer):
     package_details = PackageSerializer(source='package', read_only=True)
@@ -41,10 +39,15 @@ class BookingMemberSerializer(serializers.ModelSerializer):
         fields = ['id', 'patient', 'is_primary_contact']
 
     def create(self, validated_data):
+        # Use service layer for business logic
         patient_data = validated_data.pop('patient')
-        patient = Patient.objects.create(**patient_data)
-        booking_member = BookingMember.objects.create(patient=patient, **validated_data)
-        return booking_member
+        booking = validated_data.get('booking')
+        
+        return BookingService.add_member_to_booking(
+            booking_order=booking,
+            patient_data=patient_data,
+            is_primary_contact=validated_data.get('is_primary_contact', False)
+        )
 
 class BookingOrderSerializer(serializers.ModelSerializer):
     members = BookingMemberSerializer(many=True, read_only=True)
@@ -75,43 +78,65 @@ class BookingOrderSerializer(serializers.ModelSerializer):
             booking_slot = data['booking_slot']
             number_of_members = data.get('number_of_members', 1)
             
-            if booking_slot.available_slots < number_of_members:
-                raise serializers.ValidationError(f"Not enough slots available. Only {booking_slot.available_slots} slots left")
-            
-            if not booking_slot.is_active:
-                raise serializers.ValidationError("This booking slot is not active")
+            # Use service layer for validation
+            try:
+                # Validate slot availability
+                if booking_slot.available_slots < number_of_members:
+                    raise serializers.ValidationError(f"Not enough slots available. Only {booking_slot.available_slots} slots left")
+                
+                if not booking_slot.is_active:
+                    raise serializers.ValidationError("This booking slot is not active")
 
-            # Calculate initial total amount
-            total_amount = booking_slot.package.base_amount * number_of_members
-            data['total_amount'] = total_amount
+                # Calculate initial total amount
+                total_amount = booking_slot.package.base_amount * number_of_members
+                data['total_amount'] = total_amount
 
-            # Validate coupon codes if provided
-            online_code = data.get('online_coupon_code')
-            promo_code = data.get('promotional_coupon_code')
+                # Validate coupon codes if provided using service layer
+                online_code = data.get('online_coupon_code')
+                promo_code = data.get('promotional_coupon_code')
 
-            if online_code:
-                try:
-                    coupon = Coupon.objects.get(code=online_code, is_active=True, coupon_type='ONLINE_DEFAULT')
-                    is_valid, message = coupon.is_valid(amount=total_amount)
+                if online_code:
+                    is_valid, message, _ = CouponService.validate_coupon_for_booking(
+                        coupon_code=online_code,
+                        total_amount=total_amount
+                    )
                     if not is_valid:
                         raise serializers.ValidationError(f"Online coupon invalid: {message}")
-                    setattr(self.instance, '_online_coupon_code', online_code)
-                except Coupon.DoesNotExist:
-                    raise serializers.ValidationError("Invalid online coupon code")
+                    data['_online_coupon_code'] = online_code
 
-            if promo_code:
-                try:
-                    coupon = Coupon.objects.get(code=promo_code, is_active=True)
-                    if coupon.coupon_type == 'ONLINE_DEFAULT':
-                        raise serializers.ValidationError("Invalid promotional coupon")
-                    is_valid, message = coupon.is_valid(amount=total_amount)
+                if promo_code:
+                    is_valid, message, _ = CouponService.validate_coupon_for_booking(
+                        coupon_code=promo_code,
+                        total_amount=total_amount
+                    )
                     if not is_valid:
                         raise serializers.ValidationError(f"Promotional coupon invalid: {message}")
-                    setattr(self.instance, '_promotional_coupon_code', promo_code)
-                except Coupon.DoesNotExist:
-                    raise serializers.ValidationError("Invalid promotional coupon code")
+                    data['_promotional_coupon_code'] = promo_code
+                    
+            except ValidationError as e:
+                raise serializers.ValidationError(str(e))
             
         return data
+
+    def create(self, validated_data):
+        # Use service layer for booking creation
+        online_coupon_code = validated_data.pop('_online_coupon_code', None)
+        promotional_coupon_code = validated_data.pop('_promotional_coupon_code', None)
+        
+        # Remove any other non-model fields
+        validated_data.pop('online_coupon_code', None)
+        validated_data.pop('promotional_coupon_code', None)
+        
+        # Use service layer for booking creation
+        booking_order = BookingService.create_booking_order(
+            user=validated_data.get('user'),
+            booking_slot=validated_data.get('booking_slot'),
+            number_of_members=validated_data.get('number_of_members', 1),
+            online_coupon_code=online_coupon_code,
+            promotional_coupon_code=promotional_coupon_code
+        )
+        
+        return booking_order
 
 class ApplyCouponSerializer(serializers.Serializer):
     coupon_code = serializers.CharField(max_length=50)

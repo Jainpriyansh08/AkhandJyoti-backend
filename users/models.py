@@ -2,6 +2,8 @@ import uuid
 from django.db import models
 from django.conf import settings
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
+from django.core.validators import MinValueValidator
+from django.db.models import Q
 
 class UserManager(BaseUserManager):
     def create_user(self, mobile_number, password=None, **extra_fields):
@@ -19,12 +21,13 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
     id = models.AutoField(primary_key=True)
-    first_name = models.CharField(max_length=255, blank=True, null=True)
-    last_name = models.CharField(max_length=255, blank=True, null=True)
-    mobile_number = models.CharField(max_length=15, unique=True)
-    email = models.EmailField(unique=True, null=True, blank=True)
-    gender = models.CharField(max_length=10, choices=[('Male', 'Male'), ('Female', 'Female'), ('Other', 'Other')], null=True)
-    age = models.IntegerField(null=True)
+    username = None
+    first_name = models.CharField(max_length=30, null=True, blank=True)
+    last_name = models.CharField(max_length=30, null=True, blank=True)
+    mobile_number = models.CharField(max_length=10, unique=True)
+    email = models.EmailField(null=True, blank=True)
+    gender = models.CharField(max_length=1, choices=[('M', 'Male'), ('F', 'Female'), ('O', 'Other')], null=True, blank=True)
+    age = models.IntegerField(validators=[MinValueValidator(0)], null=True, blank=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     is_staff_member = models.BooleanField(default=False)
@@ -35,33 +38,33 @@ class User(AbstractBaseUser, PermissionsMixin):
     USERNAME_FIELD = 'mobile_number'
     REQUIRED_FIELDS = []
 
+    def __str__(self):
+        return f"{self.mobile_number}"
+
 class Patient(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    first_name = models.CharField(max_length=255)
-    last_name = models.CharField(max_length=255)
-    age = models.IntegerField()
-    mobile_number = models.CharField(max_length=15)
-    gender = models.CharField(max_length=10, choices=[('M', 'M'), ('F', 'F'), ('O', 'O')])
-    is_primary = models.BooleanField(default=False)
+    first_name = models.CharField(max_length=30)
+    last_name = models.CharField(max_length=30)
+    mobile_number = models.CharField(max_length=10)
+    gender = models.CharField(max_length=1, choices=[('M', 'Male'), ('F', 'Female'), ('O', 'Other')])
+    age = models.IntegerField(validators=[MinValueValidator(0)])
+    is_primary = models.BooleanField(default=False)  # Keeping this for now, but we'll ignore it
     created_at = models.DateTimeField(auto_now_add=True)
     modified_at = models.DateTimeField(auto_now=True)
 
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=['mobile_number', 'is_primary'],
-                condition=models.Q(is_primary=True),
-                name='unique_primary_patient_per_mobile'
-            )
-        ]
+    def __str__(self):
+        return f"{self.first_name} {self.last_name}"
 
 class StaffMember(models.Model):
     id = models.AutoField(primary_key=True)
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    staff_code = models.CharField(max_length=20, unique=True)
-    is_active = models.BooleanField(default=True)
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    department = models.CharField(max_length=50, default='General')
+    designation = models.CharField(max_length=50, default='Staff')
     created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    modified_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user.first_name} {self.user.last_name} - {self.designation}"
 
 class Otp(models.Model):
     id = models.AutoField(primary_key=True)

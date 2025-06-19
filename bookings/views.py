@@ -5,13 +5,14 @@ from rest_framework.decorators import action
 from django.utils import timezone
 from datetime import timedelta
 from django.db import transaction
-from .models import BookingSlot, BookingOrder, BookingMember, Coupon
+from .models import BookingSlot, BookingOrder, BookingMember
 from .serializers import (
     BookingSlotSerializer,
     BookingOrderSerializer,
     BookingMemberSerializer,
     ApplyCouponSerializer
 )
+from .services import BookingService, SlotService
 from django.core.exceptions import ValidationError
 
 # Create your views here.
@@ -54,15 +55,8 @@ class BookingSlotViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        Filter slots based on query parameters:
-        - date: specific date (YYYY-MM-DD)
-        - package_id: specific package
-        - include_holidays: whether to include holiday slots (default: false)
-        - include_inactive: whether to include inactive slots (default: false)
-        - future_only: whether to only show future slots (default: true)
+        Use service layer for slot filtering logic.
         """
-        queryset = BookingSlot.objects.all()
-        
         # Get query parameters
         date = self.request.query_params.get('date')
         package_id = self.request.query_params.get('package_id')
@@ -70,23 +64,18 @@ class BookingSlotViewSet(viewsets.ModelViewSet):
         include_inactive = self.request.query_params.get('include_inactive', 'false').lower() == 'true'
         future_only = self.request.query_params.get('future_only', 'true').lower() == 'true'
 
-        # Apply filters
-        if not include_inactive:
-            queryset = queryset.filter(is_active=True)
+        # Use service layer for filtering
+        slots = SlotService.get_available_slots(
+            date=date,
+            package_id=package_id,
+            include_holidays=include_holidays,
+            include_inactive=include_inactive,
+            future_only=future_only
+        )
         
-        if not include_holidays:
-            queryset = queryset.filter(is_holiday=False)
-        
-        if future_only:
-            queryset = queryset.filter(date__gte=timezone.now().date())
-
-        if date:
-            queryset = queryset.filter(date=date)
-        
-        if package_id:
-            queryset = queryset.filter(package_id=package_id)
-
-        return queryset.order_by('date', 'time')
+        # Convert back to queryset for DRF
+        slot_ids = [slot.id for slot in slots]
+        return BookingSlot.objects.filter(id__in=slot_ids).order_by('date', 'time')
 
     def perform_create(self, serializer):
         """
@@ -113,35 +102,12 @@ class BookingOrderViewSet(viewsets.ModelViewSet):
     def confirm(self, request, pk=None):
         booking = self.get_object()
         
-        # Check if booking can be confirmed
-        if booking.status != 'IN_PROGRESS':
-            return Response(
-                {"detail": "Only IN_PROGRESS bookings can be confirmed"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Check if resource hold has expired
-        if (booking.resource_hold_time and 
-            booking.resource_hold_time + timedelta(minutes=15) < timezone.now()):
-            booking.status = 'FAILED'
-            booking.save()
-            return Response(
-                {"detail": "Resource hold has expired"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Check if all required members are added
-        if booking.members.count() != booking.number_of_members:
-            return Response(
-                {"detail": "All members must be added before confirmation"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Confirm the booking
-        booking.status = 'CONFIRMED'
-        booking.save()
-        
-        return Response(self.get_serializer(booking).data)
+        try:
+            # Use service layer for confirmation logic
+            updated_booking = BookingService.confirm_booking(booking)
+            return Response(self.get_serializer(updated_booking).data)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def complete(self, request, pk=None):
@@ -162,44 +128,29 @@ class BookingOrderViewSet(viewsets.ModelViewSet):
     def cancel(self, request, pk=None):
         booking = self.get_object()
         
-        if booking.status not in ['IN_PROGRESS', 'CONFIRMED']:
-            return Response(
-                {"detail": "Cannot cancel booking in current status"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        with transaction.atomic():
-            # Release the held slots
-            booking_slot = booking.booking_slot
-            booking_slot.available_slots += booking.number_of_members
-            booking_slot.save()
-            
-            # Update booking status
-            booking.status = 'CANCELLED'
-            booking.save()
-            
-        return Response(self.get_serializer(booking).data)
+        try:
+            # Use service layer for cancellation logic
+            updated_booking = BookingService.cancel_booking(booking)
+            return Response(self.get_serializer(updated_booking).data)
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
     def add_member(self, request, pk=None):
         booking_order = self.get_object()
         
-        if booking_order.status != 'IN_PROGRESS':
-            return Response(
-                {"detail": "Cannot add members to a booking that is not in progress"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        if booking_order.members.count() >= booking_order.number_of_members:
-            return Response(
-                {"detail": "Maximum number of members already added"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
         serializer = BookingMemberSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(booking=booking_order)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+            try:
+                # Use service layer for member addition
+                booking_member = BookingService.add_member_to_booking(
+                    booking_order=booking_order,
+                    patient_data=serializer.validated_data['patient'],
+                    is_primary_contact=serializer.validated_data.get('is_primary_contact', False)
+                )
+                return Response(BookingMemberSerializer(booking_member).data, status=status.HTTP_201_CREATED)
+            except ValidationError as e:
+                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])

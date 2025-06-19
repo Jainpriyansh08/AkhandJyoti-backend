@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'packages',
     'bookings',
     'payments',
+    'coupons',
 ]
 
 MIDDLEWARE = [

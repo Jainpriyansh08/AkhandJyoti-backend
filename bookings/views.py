@@ -5,12 +5,14 @@ from rest_framework.decorators import action
 from django.utils import timezone
 from datetime import timedelta
 from django.db import transaction
-from .models import BookingSlot, BookingOrder, BookingMember
+from .models import BookingSlot, BookingOrder, BookingMember, Coupon
 from .serializers import (
     BookingSlotSerializer,
     BookingOrderSerializer,
-    BookingMemberSerializer
+    BookingMemberSerializer,
+    ApplyCouponSerializer
 )
+from django.core.exceptions import ValidationError
 
 # Create your views here.
 
@@ -37,16 +39,27 @@ class BookingSlotViewSet(viewsets.ModelViewSet):
     """
     queryset = BookingSlot.objects.all()
     serializer_class = BookingSlotSerializer
-    permission_classes = [IsStaffOrReadOnly]
+    
+    def get_permissions(self):
+        """
+        Allow unauthenticated access to list and retrieve.
+        Require staff permissions for create, update, delete.
+        """
+        if self.action in ['list', 'retrieve']:
+            permission_classes = [permissions.AllowAny]
+            self.authentication_classes = []  # No authentication required for list and retrieve
+        else:
+            permission_classes = [permissions.IsAdminUser]
+        return [permission() for permission in permission_classes]
 
     def get_queryset(self):
         """
         Filter slots based on query parameters:
-        - date: specific date
+        - date: specific date (YYYY-MM-DD)
         - package_id: specific package
-        - include_holidays: whether to include holiday slots
-        - include_inactive: whether to include inactive slots
-        - future_only: whether to only show future slots (default True)
+        - include_holidays: whether to include holiday slots (default: false)
+        - include_inactive: whether to include inactive slots (default: false)
+        - future_only: whether to only show future slots (default: true)
         """
         queryset = BookingSlot.objects.all()
         
@@ -82,17 +95,19 @@ class BookingSlotViewSet(viewsets.ModelViewSet):
         serializer.save(available_slots=serializer.validated_data['total_slots'])
 
 class BookingOrderViewSet(viewsets.ModelViewSet):
+    queryset = BookingOrder.objects.all()
     serializer_class = BookingOrderSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        user = self.request.user
-        if user.is_staff or user.is_staff_member:
-            return BookingOrder.objects.all()
-        return BookingOrder.objects.filter(account=user)
+        return BookingOrder.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
-        serializer.save(account=self.request.user)
+        booking_slot = serializer.validated_data['booking_slot']
+        serializer.save(
+            user=self.request.user,
+            package=booking_slot.package
+        )
 
     @action(detail=True, methods=['post'])
     def confirm(self, request, pk=None):
@@ -167,65 +182,102 @@ class BookingOrderViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def add_member(self, request, pk=None):
-        booking = self.get_object()
+        booking_order = self.get_object()
         
-        # Check if booking is in valid state
-        if booking.status != 'IN_PROGRESS':
+        if booking_order.status != 'IN_PROGRESS':
             return Response(
-                {"detail": "Can only add members to IN_PROGRESS bookings"}, 
+                {"detail": "Cannot add members to a booking that is not in progress"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
             
-        # Check if we've reached member limit
-        if booking.members.count() >= booking.number_of_members:
+        if booking_order.members.count() >= booking_order.number_of_members:
             return Response(
-                {"detail": "Cannot add more members than specified"}, 
+                {"detail": "Maximum number of members already added"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
             
-        # Create member
         serializer = BookingMemberSerializer(data=request.data)
         if serializer.is_valid():
-            serializer.save(booking=booking)
+            serializer.save(booking=booking_order)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'])
-    def generate_his_invoice(self, request, pk=None):
-        booking = self.get_object()
+    def apply_coupon(self, request, pk=None):
+        booking_order = self.get_object()
         
-        # Check if booking is confirmed
-        if booking.status != 'CONFIRMED':
+        if booking_order.status != 'IN_PROGRESS':
             return Response(
-                {"detail": "Can only generate HIS invoice for confirmed bookings"}, 
+                {"detail": "Cannot apply coupon to a booking that is not in progress"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
-            
-        # Check if invoice is already generated
-        if booking.his_invoice_generated:
-            return Response(
-                {"detail": "HIS invoice already generated"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        # Generate invoice
-        invoice_number = request.data.get('invoice_number')
-        if not invoice_number:
-            return Response(
-                {"detail": "Invoice number is required"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        booking.his_invoice_number = invoice_number
-        booking.his_invoice_generated = True
-        booking.save()
+
+        serializer = ApplyCouponSerializer(
+            data=request.data,
+            context={'booking_order': booking_order}
+        )
         
-        return Response(self.get_serializer(booking).data)
+        if serializer.is_valid():
+            return Response({
+                'discount_applied': serializer.validated_data['discount'],
+                'final_amount': booking_order.final_amount
+            })
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def remove_coupon(self, request, pk=None):
+        booking_order = self.get_object()
+        
+        if booking_order.status != 'IN_PROGRESS':
+            return Response(
+                {"detail": "Cannot remove coupon from a booking that is not in progress"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        coupon_code = request.data.get('coupon_code')
+        if not coupon_code:
+            return Response(
+                {"detail": "Coupon code is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            discount_removed = booking_order.remove_coupon(coupon_code)
+            return Response({
+                'discount_removed': discount_removed,
+                'final_amount': booking_order.final_amount
+            })
+        except ValidationError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'])
+    def make_payment(self, request, pk=None):
+        booking_order = self.get_object()
+        
+        if booking_order.status != 'IN_PROGRESS':
+            return Response(
+                {"detail": "Cannot process payment for a booking that is not in progress"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        if booking_order.members.count() != booking_order.number_of_members:
+            return Response(
+                {"detail": "Please add all members before making payment"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Here you would integrate with your payment gateway
+        # For now, we'll just mark the booking as confirmed
+        booking_order.status = 'CONFIRMED'
+        booking_order.save()
+        
+        serializer = self.get_serializer(booking_order)
+        return Response(serializer.data)
 
     @action(detail=False, methods=['get'])
     def my_bookings(self, request):
         bookings = self.get_queryset().filter(
-            account=request.user
+            user=request.user
         ).order_by('-created_at')
         page = self.paginate_queryset(bookings)
         if page is not None:

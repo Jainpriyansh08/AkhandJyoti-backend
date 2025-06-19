@@ -4,18 +4,18 @@ from datetime import timedelta
 from .models import BookingSlot, BookingOrder, BookingMember
 from users.serializers import PatientSerializer, StaffMemberSerializer
 from packages.serializers import PackageSerializer
+from coupons.serializers import CouponSerializer
+from django.core.exceptions import ValidationError
+from users.models import Patient
+from packages.models import Package
+from coupons.models import Coupon
 
 class BookingSlotSerializer(serializers.ModelSerializer):
     package_details = PackageSerializer(source='package', read_only=True)
     
     class Meta:
         model = BookingSlot
-        fields = [
-            'id', 'date', 'time', 'total_slots', 'available_slots',
-            'is_holiday', 'package', 'package_details', 'is_active',
-            'created_at', 'modified_at'
-        ]
-        read_only_fields = ['available_slots', 'created_at', 'modified_at']
+        fields = '__all__'
 
     def validate(self, data):
         # Validate total slots
@@ -34,39 +34,96 @@ class BookingSlotSerializer(serializers.ModelSerializer):
         return data
 
 class BookingMemberSerializer(serializers.ModelSerializer):
-    patient_details = PatientSerializer(source='patient', read_only=True)
-    
+    patient = PatientSerializer()
+
     class Meta:
         model = BookingMember
-        fields = ['id', 'booking', 'patient', 'patient_details', 'is_primary_contact', 
-                 'created_at', 'modified_at']
-        read_only_fields = ['created_at', 'modified_at', 'booking']
+        fields = ['id', 'patient', 'is_primary_contact']
+
+    def create(self, validated_data):
+        patient_data = validated_data.pop('patient')
+        patient = Patient.objects.create(**patient_data)
+        booking_member = BookingMember.objects.create(patient=patient, **validated_data)
+        return booking_member
 
 class BookingOrderSerializer(serializers.ModelSerializer):
     members = BookingMemberSerializer(many=True, read_only=True)
-    booking_slot_details = BookingSlotSerializer(source='booking_slot', read_only=True)
-    package_details = PackageSerializer(source='package', read_only=True)
-    assisted_by_details = StaffMemberSerializer(source='assisted_by', many=True, read_only=True)
-    
+    package = PackageSerializer(read_only=True)
+    online_coupon = CouponSerializer(read_only=True)
+    promotional_coupon = CouponSerializer(read_only=True)
+    online_coupon_code = serializers.CharField(write_only=True, required=False)
+    promotional_coupon_code = serializers.CharField(write_only=True, required=False)
+
     class Meta:
         model = BookingOrder
-        fields = ['id', 'booking_slot', 'booking_slot_details', 'account', 'package',
-                 'package_details', 'status', 'total_amount', 'final_amount', 
-                 'is_assisted_booking', 'assisted_by', 'assisted_by_details', 
-                 'number_of_members', 'resource_hold_time', 'his_invoice_number', 
-                 'members', 'created_at', 'modified_at']
-        read_only_fields = ['status', 'total_amount', 'final_amount',
-                           'resource_hold_time', 'his_invoice_number',
-                           'created_at', 'modified_at', 'account']
+        fields = [
+            'id', 'booking_slot', 'user', 'package', 'status',
+            'total_amount', 'final_amount', 'is_assisted_booking',
+            'number_of_members', 'members', 'online_coupon',
+            'promotional_coupon', 'online_discount', 'promotional_discount',
+            'online_coupon_code', 'promotional_coupon_code',
+            'created_at', 'modified_at'
+        ]
+        read_only_fields = ['total_amount', 'final_amount', 'user', 'package', 'status',
+                           'online_discount', 'promotional_discount', 'created_at', 'modified_at']
 
     def validate(self, data):
-        # Validate number of members
-        if data.get('number_of_members', 0) < 1:
-            raise serializers.ValidationError("Number of members must be at least 1")
+        if self.instance is None:  # Only for creation
+            if not data.get('booking_slot'):
+                raise serializers.ValidationError("Booking slot is required")
+            
+            booking_slot = data['booking_slot']
+            number_of_members = data.get('number_of_members', 1)
+            
+            if booking_slot.available_slots < number_of_members:
+                raise serializers.ValidationError(f"Not enough slots available. Only {booking_slot.available_slots} slots left")
+            
+            if not booking_slot.is_active:
+                raise serializers.ValidationError("This booking slot is not active")
 
-        # Validate booking slot availability
-        booking_slot = data.get('booking_slot')
-        if booking_slot and booking_slot.available_slots < data.get('number_of_members', 1):
-            raise serializers.ValidationError("Not enough slots available")
+            # Calculate initial total amount
+            total_amount = booking_slot.package.base_amount * number_of_members
+            data['total_amount'] = total_amount
+
+            # Validate coupon codes if provided
+            online_code = data.get('online_coupon_code')
+            promo_code = data.get('promotional_coupon_code')
+
+            if online_code:
+                try:
+                    coupon = Coupon.objects.get(code=online_code, is_active=True, coupon_type='ONLINE_DEFAULT')
+                    is_valid, message = coupon.is_valid(amount=total_amount)
+                    if not is_valid:
+                        raise serializers.ValidationError(f"Online coupon invalid: {message}")
+                    setattr(self.instance, '_online_coupon_code', online_code)
+                except Coupon.DoesNotExist:
+                    raise serializers.ValidationError("Invalid online coupon code")
+
+            if promo_code:
+                try:
+                    coupon = Coupon.objects.get(code=promo_code, is_active=True)
+                    if coupon.coupon_type == 'ONLINE_DEFAULT':
+                        raise serializers.ValidationError("Invalid promotional coupon")
+                    is_valid, message = coupon.is_valid(amount=total_amount)
+                    if not is_valid:
+                        raise serializers.ValidationError(f"Promotional coupon invalid: {message}")
+                    setattr(self.instance, '_promotional_coupon_code', promo_code)
+                except Coupon.DoesNotExist:
+                    raise serializers.ValidationError("Invalid promotional coupon code")
+            
+        return data
+
+class ApplyCouponSerializer(serializers.Serializer):
+    coupon_code = serializers.CharField(max_length=50)
+
+    def validate(self, data):
+        booking_order = self.context['booking_order']
+        coupon_code = data['coupon_code']
+
+        try:
+            discount = booking_order.apply_coupon(coupon_code)
+            data['discount'] = discount
+        except ValidationError as e:
+            raise serializers.ValidationError(str(e))
 
         return data 

@@ -14,7 +14,7 @@ class PaymentTransaction(models.Model):
         ('RAZORPAY', 'Razorpay'),
         ('CASH', 'Cash'),
     )
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    payment_id = models.AutoField(primary_key=True)
     booking_order = models.ForeignKey('bookings.BookingOrder', on_delete=models.CASCADE, related_name='transactions')
     mode_of_payment = models.CharField(max_length=50, choices=MODE_CHOICES)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
